@@ -1,101 +1,92 @@
 import hashlib
-import json
-import requests
-import subprocess
+import time
+
+class Block:
+    def __init__(self, version, prev_hash, merkleroot, timestamp, bits, nonce):
+        self.version = version
+        self.prev_hash = prev_hash
+        self.merkleroot = merkleroot
+        self.timestamp = timestamp
+        self.bits = bits
+        self.nonce = nonce
+        self.hash = self.calculate_hash()
+
+    def calculate_hash(self):
+        hash_data = f"{self.version}{self.prev_hash}{self.merkleroot}{self.timestamp}{self.bits}{self.nonce}".encode('utf-8')
+        return hashlib.sha256(hash_data).hexdigest()
 
 
-def get_block_header_by_height(height):
-    block_hash = subprocess.check_output(f'bitcoin-cli getblockhash {height}', shell=True).decode().strip()
-    # strip leading b and trailing \n
-    print('block_hash: ', block_hash)
-    block_header = subprocess.check_output(f'bitcoin-cli getblockheader {block_hash}', shell=True).decode()
-    return block_header
+class Blockchain:
+    def __init__(self, difficulty):
+        self.chain = [self.create_genesis_block()]
+        self.difficulty = difficulty
 
+    def get_latest_block(self):
+        return self.chain[-1]
 
-def sha256(x):
-    return bytes(hashlib.sha256(x).digest())
+    def add_block(self, new_block):
+        new_block.previous_hash = self.get_latest_block().hash
+        new_block.hash = new_block.calculate_hash()
+        self.chain.append(new_block)
 
+    def is_valid(self):
+        for i in range(1, len(self.chain)):
+            current_block = self.chain[i]
+            previous_block = self.chain[i-1]
+            if current_block.hash != current_block.calculate_hash():
+                return False
+            if current_block.previous_hash != previous_block.hash:
+                return False
+        return True
 
-def sha256d(x):
-    return sha256(sha256(x))
+class MiningNode:
+    def __init__(self, name, blockchain):
+        self.name = name
+        self.nonce = 0
+        self.blockchain = blockchain
 
+    def mine(self, block_data):
+        target = '0' * self.blockchain.difficulty
+        while True:
+            timestamp = time.time()
+            new_block = Block(len(self.blockchain.chain), block_data, timestamp, '')
+            hash_data = f"{new_block.index}{new_block.data}{new_block.timestamp}".encode('utf-8')
+            hash_result = hashlib.sha256(hash_data).hexdigest()
+            if hash_result[:self.blockchain.difficulty] == target:
+                new_block.previous_hash = self.blockchain.get_latest_block().hash
+                new_block.hash = new_block.calculate_hash()
+                print(f"{self.name} mined block with nonce {self.nonce} and hash {new_block.hash}")
+                self.blockchain.add_block(new_block)
+                break
+            self.nonce += 1
 
-def hash_decode(x):
-    return bytes.fromhex(x)[::-1]
+genesis_info = {
+    "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    "confirmations": 1,
+    "height": 0,
+    "version": 1,
+    "versionHex": "00000001",
+    "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+    "time": 1231006505,
+    "mediantime": 1231006505,
+    "nonce": 2083236893,
+    "bits": "1d00ffff",
+    "difficulty": 1,
+    "chainwork": "0000000000000000000000000000000000000000000000000000000100010001",
+    "nTx": 1,
+    "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+}
 
+version = genesis_block['version']
+prev_hash = genesis_block['previous_hash']
+merkleroot = genesis_block['merkleroot']
+timestamp = genesis_block['time']
+bits = genesis_block['bits']
+nonce = genesis_block['nonce']
 
-def merklize(tx_hash, merkle_branch, pos):
-    """Return calculated merkle root."""
-    h = hash_decode(tx_hash)
-    merkle_branch_bytes = [hash_decode(item) for item in merkle_branch]
-    data = {'name': tx_hash, 'children': []}
-    for item in merkle_branch_bytes:
-        if pos & 1:
-            inner_node = item + h
-            data = {
-                'name': sha256d(inner_node)[::-1].hex(),
-                'children': [
-                    {
-                        'name': item.hex(),
-                    },
-                    data,
-                ],
-            }
-        else:
-            inner_node = h + item
-            data = {
-                'name': sha256d(inner_node)[::-1].hex(),
-                'children': [
-                    data,
-                    {
-                        'name': item.hex(),
-                    },
-                ],
-            }
-        h = sha256d(inner_node)
-        pos >>= 1
+genesis_block = Block(version, prev_hash, merkleroot, timestamp, bits, nonce)
 
-    return {
-        'calculated_merkle_root': h[::-1].hex(),
-        'tree': data,
-    }
-
-
-from anytree import Node, RenderTree
-
-
-def build_tree(node_data):
-    node_name = node_data["name"]
-    node_children = node_data.get("children", [])
-    node = Node(node_name)
-    for child in node_children:
-        child_node = build_tree(child)
-        child_node.parent = node
-    return node
-
-
-def print_hash_tree(tree):
-    root_data = tree["tree"]
-    root_node = build_tree(root_data)
-    for pre, _, node in RenderTree(root_node):
-        print(f"{pre}{node.name}")
-
-
-# user inputs a txid
-txid = input('Enter the txid for the merkle_proof: ').strip()
-
-merkle_proof = requests.get(
-    f"https://blockstream.info/api/tx/{txid}/merkle-proof").text
-merkle_dict = json.loads(merkle_proof)
-
-print("Merkle Proof:\n")
-print(json.dumps(merkle_dict, indent=4))
-
-merkle_tree = merklize(txid, merkle_dict["merkle"], int(merkle_dict["pos"]))
-print("\nCalculated Merkle Tree:\n")
-print_hash_tree(merkle_tree)
-
-local_block_header = get_block_header_by_height(merkle_dict["block_height"])
-print("\nBlockheader from our node: ", local_block_header)
-
-print("\nCalculated Merkle Root matches Local Blockheader's Merkle Root: ", merkle_tree["calculated_merkle_root"] == json.loads(local_block_header)["merkleroot"])
+blockchain = Blockchain(5)
+alice = MiningNode("Alice", blockchain)
+bob = MiningNode("Bob", blockchain)
+charlie = MiningNode("Charlie", blockchain)
